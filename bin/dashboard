@@ -6,7 +6,7 @@
 use strict;
 use warnings;
 
-use utf8;
+# use utf8;
 use feature 'state';
 
 my @needfull;	# Tracks required modules to be installed
@@ -17,6 +17,7 @@ BEGIN {
 		'Config::Abstraction',
 		'Log::Abstraction',
 		'File::Basename',
+		'HTML::Entities',
 		'HTML::TreeBuilder::XPath',
 		'LWP::UserAgent',
 		'Mojolicious::Lite',
@@ -131,16 +132,16 @@ get '/' => sub {
 		if ($@ || !$res || ($res->code == 500 && $res->decoded_content =~ /Can't connect|Name or service not known|timed out/i)) {
 			$status= 'Unreachable';
 			$color = 'red';
-			$icon = '🔴';
+			$icon = decode_entities('&#x1F534;');	# Red blob
 			$code = '';
 			$tooltip = $@ || ($res ? $res->status_line : 'No response');
 			log_error($url, 'Unreachable', $tooltip);
 		} elsif ($res->is_success) {
 			$status= 'OK';
 			$color = 'green';
-			$icon = '🟢';
-			$code = $res->code;
-			$tooltip = $res->status_line;
+			$icon = decode_entities('&#x1F7E2;');	# Green blob
+			$code = $res->code();
+			$tooltip = $res->status_line();
 
 			if($res && $res->is_success) {
 				my $tree = HTML::TreeBuilder::XPath->new;
@@ -157,7 +158,7 @@ get '/' => sub {
 		} else {
 			$status= 'HTTP Error';
 			$color = 'orange';
-			$icon = '🟡';
+			$icon = decode_entities('&#x1F7E1;');	# Yellow blob
 			$code = $res->code;
 			$tooltip = $res->status_line;
 			log_error($url, 'HTTP Error', $tooltip);
