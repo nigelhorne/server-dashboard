@@ -1,0 +1,19 @@
+{
+  "servers": [
+    {
+      "url": "https://google.com",
+      "group": "Production"
+    },
+    {
+      "url": "https://www.example.com/404",
+      "group": "Development"
+    },
+    {
+      "url": "https://nonexistent.domain.example",
+      "group": "Development"
+    }
+  ],
+  "logger": {
+    "file": "/var/log/dashboard.log"
+  }
+}
