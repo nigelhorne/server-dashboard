@@ -1,4 +1,4 @@
-# server-dashboard - Monitor and visualize your web servers' health in real-time
+# Monitor and visualize your web servers' health in real-time
 
 This script creates a web dashboard that monitors the status of a list of web servers.
 It uses the **Mojolicious** framework to build a simple web interface that shows the server status, HTTP response codes, response time, and color-coded indicators (green for healthy servers, yellow for errors like 404 or 500, and red for unreachable servers).
