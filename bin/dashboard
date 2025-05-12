@@ -6,7 +6,7 @@
 use strict;
 use warnings;
 
-# use utf8;
+use utf8;	# Needed for &ShortUpArrow; and &ShortDownArrow;
 use feature 'state';
 
 my @needfull;	# Tracks required modules to be installed
@@ -435,12 +435,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   restoreOrder(); // Apply saved order on load
 
-  // 🆕 Save sort settings
+  // Save sort settings
   function saveSort(column, direction) {
     localStorage.setItem(sortKey, JSON.stringify({ column, direction }));
   }
 
-  // 🆕 Restore sort settings
+  // Restore sort settings
   function restoreSort() {
     const saved = JSON.parse(localStorage.getItem(sortKey) || '{}');
     if (saved.column) {
@@ -461,6 +461,7 @@ function applySort(column, direction = 'asc', save = true) {
 
   // Add arrow to sorted column
   const sortedTh = headerRow.children[colIndex];
+  // &ShortUpArrow; &ShortDownArrow;
   sortedTh.textContent = (sortedTh.dataset.label || sortedTh.textContent.trim()) + (direction === 'asc' ? ' ↑' : ' ↓');
 
   // Sort rows
@@ -479,7 +480,7 @@ function applySort(column, direction = 'asc', save = true) {
   if (save) saveSort(column, direction);
 }
 
-  // 🆕 Sort toggle click handler
+  // Sort toggle click handler
   headerRow.querySelectorAll('th').forEach(th => {
     th.addEventListener('click', (e) => {
       // if (e.target.draggable) return; // Skip drag
@@ -492,7 +493,7 @@ function applySort(column, direction = 'asc', save = true) {
   });
 
   restoreOrder(); // existing
-  restoreSort();  // 🆕 new
+  restoreSort();  // new
 });
 
 </script>
