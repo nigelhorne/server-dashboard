@@ -8,8 +8,8 @@ The list of servers to monitor is read from a file, such as `$HOME/.conf/dashboa
 It also calculates the response time of each server and assigns a color to the response time, helping to quickly identify slow servers (orange for moderate delays and red for slow responses).
 The dashboard auto-refreshes every 60 seconds to display up-to-date server status information.
 
-The script also logs detailed error information into a `server_status.log` file whenever it encounters an unreachable server or HTTP error.
-It records the timestamp, the URL, the status (e.g., "Unreachable" or "HTTP Error"), and the error message (e.g., connection refusal or timeout).
+The script also logs detailed error information into a file whenever it encounters an unreachable server or HTTP error,
+recording the timestamp, the URL, the status (e.g., "Unreachable" or "HTTP Error"), and the error message (e.g., connection refusal or timeout).
 The logging helps with troubleshooting by providing a history of server failures and errors.
 Users can filter the dashboard to show only healthy servers or only servers with errors.
 Additionally, each server URL is clickable, allowing users to directly visit the server’s webpage for more details.
