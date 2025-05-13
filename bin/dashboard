@@ -21,6 +21,7 @@ BEGIN {
 		'File::Basename',
 		'HTML::Entities',
 		'HTML::TreeBuilder::XPath',
+		'LWP::ConnCache',
 		'LWP::UserAgent',
 		'Mojolicious::Lite',
 		'Parallel::ForkManager',
@@ -75,10 +76,18 @@ use Mojo::JSON qw(encode_json);
 use Time::HiRes qw(time);
 use autodie qw(:all);
 
+my $LATENCY_THRESHOLD_MS = 2000;	# slow if > 2000ms
+my $FAILURE_ALERTS = 1;	# alert on HTTP failure
+my $ALERT_COOLDOWN_SECS = 600;	# 10 minutes
+my %last_alerts;	# key => timestamp
+
+my $conn_cache = LWP::ConnCache->new();
 my $log;
+my %responses;	# for collecting responses
 
 # Log to a file for errors
-sub log_error {
+sub log_error
+{
 	my ($url, $status, $message) = @_;
 
 	if($log) {
@@ -93,37 +102,92 @@ sub log_error {
 }
 
 # Read server list from config file
-sub load_servers {
+sub load_config
+{
+	my $rc;
+
 	if(my $config = Config::Abstraction->new(no_fixate => 1)) {
+		$rc->{status_icons} = $config->get('status.icons') || {
+			ok => decode_entities('&#x1F7E2;'),	# Green blob
+			error => decode_entities('&#x1F7E1;'),	# Yellow blob
+			unreachable => decode_entities('&#x1F534;')	# Red blob
+		};
+		$rc->{max_processes} = $config->get('maxprocesses') || 5;
 		if(my $logger = $config->get('logger') || $config->get('global.logger')) {
 			$log = Log::Abstraction->new($logger);
-			return $config->get('servers');
+			$rc->{'servers'} = $config->get('servers');
 		}
+	} else {
+		$rc->{max_processes} = 5;
+		$rc->{'servers'} = [
+			{
+				'url' => 'https://www.google.com',
+				'group' => 'Production'
+			}
+		];
+		$rc->{status_icons} = {
+			ok => decode_entities('&#x1F7E2;'),	# Green blob
+			error => decode_entities('&#x1F7E1;'),	# Yellow blob
+			unreachable => decode_entities('&#x1F534;')	# Red blob
+		}
+	}
+	return $rc;
+}
+
+sub send_email_alert
+{
+	my($config, $subject, $body) = @_;
+
+	if(open(my $pout, '|-', '/usr/sbin/sendmail -t')) {
+		my $from = ($config && $config->get('alert.from')) || 'monitor@nigelhorne.com';
+		my $to = ($config && $config->get('alert.to')) || 'alerts@nigelhorne.com';
+
+		print $pout "To: $to\nFrom: $from\n",
+			"Subject: $subject\n\n$body\n";
 	}
 }
 
-# Route: dashboard with optional filter
+sub should_alert {
+	my ($key, $now) = @_;
+	return 1 if !exists $last_alerts{$key};
+	return ($now - $last_alerts{$key}) > $ALERT_COOLDOWN_SECS;
+}
+
+sub cleanup_old_alerts {
+	my $now = time;
+	for my $key (keys %last_alerts) {
+		delete $last_alerts{$key} if ($now - $last_alerts{$key}) > 3600; # 1 hour
+	}
+}
+
+Mojo::IOLoop->recurring(600 => \&cleanup_old_alerts);
+
+# HTML dashboard
 get '/' => sub {
 	my $c = shift;
 	my $filter = $c->param('filter') || 'all';	# all, ok, error
-	my $group_filter = $c->param('group') || 'all';  # Filter by server group
-
-	my $ua = LWP::UserAgent->new(timeout => 5);
-	my @servers = @{load_servers()};
-
-	my $pm = Parallel::ForkManager->new((scalar(@servers) > 5) ? 5 : scalar(@servers));	# using the system temp dir $L<File::Temp::tempdir()
+	my $group_filter = $c->param('group') || 'all';	# Filter by server group
 
 	# data structure retrieval and handling
-	my %responses;  # for collecting responses	
+	my $ua = LWP::UserAgent->new(timeout => 5);
+	$ua->conn_cache($conn_cache);
+	$ua->env_proxy(1);
+	# $ua->agent($useragentname);
+	# $ua->from($me);
+	my $config = load_config();
+	my @servers = @{$config->{'servers'}};
+	my $max_processes = $config->{'max_processes'};
+
+	my $pm = Parallel::ForkManager->new((scalar(@servers) > $max_processes) ? $max_processes : scalar(@servers));	# using the system temp dir File::Temp::tempdir()
 
 	$pm->run_on_finish (
 		sub {
 			my ($pid, $exit_code, $url, $exit_signal, $core_dump, $response) = @_;
 
 			# see what the child sent us, if anything
-			if(defined($response)) {  # test rather than assume child sent anything
+			if(defined($response)) {	# test rather than assume child sent anything
 				$responses{$response->{'url'}} = $response;
-			} else {
+			# } else {
 				# log_error($url, 'Unreachable', $res->status_line());
 			}
 		}
@@ -137,54 +201,65 @@ get '/' => sub {
 		eval {
 			$response = $ua->get($url->{'url'});
 		};
-		my $duration = int(1000 * (time - $start));	# in ms
+		my $latency = int(1000 * (time - $start));	# in ms
 
 		if($response) {
 			$pm->finish(0, {
 				url => $url->{'url'},
 				response => $response,
-				duration => $duration
+				latency => $latency
 			});
 		} else {
 			$pm->finish(1, {
 				url => $url->{'url'},
-				duration => $duration
+				latency => $latency
 			});
 		}
 	}
 
 	$pm->wait_all_children();
 
-	my @statuses;
+	my(@statuses, @alerts);
 	foreach my $url (@servers) {
 	        next if $group_filter ne 'all' && $url->{group} ne $group_filter;
 
 		my $group = $url->{'group'};
 		$url = $url->{'url'};
 
-		my ($res, $status, $color, $code, $icon, $duration, $tooltip);
+		my ($res, $status, $color, $code, $icon, $latency, $tooltip);
 
 		my $start = time;
 		$res = $responses{$url}->{'response'};
-		$duration = $responses{$url}->{'duration'};
+		$latency = $responses{$url}->{'latency'};
 
 		my $favicon_url = '';
 		# Fallback if no icon found
 		if (!$favicon_url) {
 			($favicon_url = $url) =~ s{^(https?://[^/]+).*}{$1/favicon.ico};
 		}
+		my %status_colors = (
+			ok => 'green',
+			error => 'orange',
+			unreachable => 'red',
+		);
 
 		if(($res->code == 500 && $res->decoded_content =~ /Can't connect|Name or service not known|timed out/i)) {
-			$status= 'Unreachable';
-			$color = 'red';
-			$icon = decode_entities('&#x1F534;');	# Red blob
+			$status = 'Unreachable';
 			$code = '';
 			$tooltip = $@ || ($res ? $res->status_line : 'No response');
+
 			log_error($url, 'Unreachable', $tooltip);
+
+			if($FAILURE_ALERTS) {
+				my $key = "DOWN:$url";
+
+				if (should_alert($key, $start)) {
+					push @alerts, "❌ $url is DOWN";
+					$last_alerts{$key} = $start;
+				}
+			}
 		} elsif ($res->is_success) {
-			$status= 'OK';
-			$color = 'green';
-			$icon = decode_entities('&#x1F7E2;');	# Green blob
+			$status = 'OK';
 			$code = $res->code();
 			$tooltip = $res->status_line();
 
@@ -199,23 +274,42 @@ get '/' => sub {
 				}
 				$tree->delete();
 			}
+			if($latency > $LATENCY_THRESHOLD_MS) {
+				my $key = "SLOW:$url";
 
+				if (should_alert($key, $start)) {
+					push @alerts, "⚠️ $url is slow: ${latency}ms";
+					$last_alerts{$key} = $start;
+				}
+			}
 		} else {
-			$status= 'HTTP Error';
-			$color = 'orange';
+			$status = 'Error';
 			$icon = decode_entities('&#x1F7E1;');	# Yellow blob
 			$code = $res->code;
 			$tooltip = $res->status_line;
 			log_error($url, 'HTTP Error', $tooltip);
+			if($latency > $LATENCY_THRESHOLD_MS) {
+				my $key = "SLOW:$url";
+
+				if (should_alert($key, $start)) {
+					push @alerts, "⚠️ $url is slow: ${latency}ms";
+					$last_alerts{$key} = $start;
+				}
+			}
+
 		}
 
-		my $time_color = $duration < 500 ? 'green'
-						: $duration < 1000 ? 'orange'
+		$color = $status_colors{lc($status)};
+		$config->{'status_icons'}->{lc($status)} or die "Add $status to status_icons";
+		$icon = decode_entities($config->{'status_icons'}->{lc($status)});
+
+		my $time_color = $latency < 500 ? 'green'
+						: $latency < 1000 ? 'orange'
 						: 'red';
 
 		state %history;
 
-		push @{$history{$url}}, $duration;
+		push @{$history{$url}}, $latency;
 		splice @{$history{$url}}, 0, -20 if @{$history{$url}} > 20;
 		# $history = [ @$history[-20..-1] ] if @$history > 20;
 
@@ -226,7 +320,7 @@ get '/' => sub {
 			color => $color,
 			code => $code,
 			icon => $icon,
-			duration => $duration,
+			latency => $latency,
 			time_color => $time_color,
 			tooltip => $tooltip,
 			favicon => $favicon_url,
@@ -242,13 +336,27 @@ get '/' => sub {
 	}
 
 	$c->stash(
-	    statuses     => \@statuses,
-	    filter       => $filter,
-	    encode_json  => \&encode_json,
+	    statuses => \@statuses,
+	    filter => $filter,
+	    encode_json => \&encode_json,
 	    group_filter => $group_filter
 	);
 
 	$c->render(template => 'dashboard');
+
+	if(scalar(@alerts)) {
+		send_email_alert($config, 'Site Alert: ' . scalar(@alerts) . ' issues', join("\n", @alerts));
+	}
+};
+
+# JSON API endpoint
+get '/api/status' => sub {
+	my $c = shift;
+
+	$c->render(json => {
+		timestamp => time,
+		results => \%responses
+	});
 };
 
 app->start();
@@ -294,7 +402,7 @@ __DATA__
       <th data-column="group" draggable="true">Group</th>
       <th data-column="status" draggable="true">Status</th>
       <th data-column="code" draggable="true">HTTP Code</th>
-      <th data-column="duration" draggable="true">Response Time</th>
+      <th data-column="latency" draggable="true">Response Time</th>
       <th data-column="chart" draggable="true">Latency Chart</th>
     </tr>
   </thead>
@@ -312,7 +420,7 @@ __DATA__
 </td>
 
         <td><%= $s->{code} || '-' %></td>
-	<td style="color:<%= $s->{time_color} %>;" class="compact-latency"><%= $s->{duration} %> ms</td>
+	<td style="color:<%= $s->{time_color} %>;" class="compact-latency"><%= $s->{latency} %> ms</td>
         <td>
           <canvas class="latency-chart" id="chart-<%= $i %>" width="100" height="30"></canvas>
 <script>
@@ -340,13 +448,51 @@ function applyGroupFilter() {
 }
 
 </script>
-
         </td>
       </tr>
     % $i++;
     % }
   </tbody>
 </table>
+<!-- Enable this code to see a separate latencyChart
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<canvas id="latencyChart"></canvas>
+<script>
+async function fetchAndDraw() {
+  const res = await fetch('/api/status');
+  const json = await res.json();
+  console.log(json);
+
+  const dataArr = Object.entries(json.results).map(([url, info]) => ({
+    name: url,
+    latency: info.latency
+  }));
+
+  const labels = dataArr.map(x => x.name);
+  const data = dataArr.map(x => x.latency);
+
+  new Chart(document.getElementById('latencyChart'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'Latency (ms)',
+        data: data,
+        backgroundColor: 'rgba(54, 162, 235, 0.7)'
+      }]
+    },
+    options: {
+      scales: {
+        y: { beginAtZero: true }
+      }
+    }
+  });
+}
+
+fetchAndDraw();
+</script>
+-->
+
 
 @@ layouts/default.html.ep
 <!DOCTYPE html>
@@ -539,8 +685,48 @@ function applySort(column, direction = 'asc', save = true) {
 
   restoreOrder(); // existing
   restoreSort();  // new
+  checkForStatusChanges();
 });
 
-</script>
-  </body>
+function checkForStatusChanges() {
+  const rows = document.querySelectorAll('#dashboard-table tbody tr');
+  rows.forEach(row => {
+    const serverUrl = row.children[0].innerText.trim();
+    const statusCell = row.children[2];
+    const color = statusCell.style.color;
+
+    const prevColor = localStorage.getItem(`status-${serverUrl}`);
+    if (color === 'red' && prevColor !== 'red') {
+      // showNotification(`Alert: ${serverUrl} is now DOWN`);
+      notifyStatusRed(`${serverUrl}`);
+    }
+
+    localStorage.setItem(`status-${serverUrl}`, color);
+  });
+}
+
+function notifyStatusRed(url) {
+  if (Notification.permission === "granted") {
+    new Notification("⚠ Server Alert", {
+      body: `Status changed to RED for: ${url}`,
+      icon: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/45/Warning_icon.svg/1024px-Warning_icon.svg.png"
+    });
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+	if (Notification && Notification.permission !== "granted") {
+		Notification.requestPermission();
+	}
+	checkForStatusChanges();
+});
+
+function showNotification(message) {
+  if (Notification.permission === "granted") {
+    new Notification(message);
+  }
+}
+
+		</script>
+	</body>
 </html>
