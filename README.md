@@ -1,5 +1,7 @@
 # Monitor and visualize your web servers' health in real-time
 
+## Introduction
+
 This script creates a web dashboard that monitors the status of a list of web servers.
 It uses the **Mojolicious** framework to build a simple web interface that shows the server status, HTTP response codes, response time, and color-coded indicators (green for healthy servers, yellow for errors like 404 or 500, and red for unreachable servers).
 The list of servers to monitor is read from a file, such as `$HOME/.conf/dashboard`, and the script uses `LWP::UserAgent` to send HTTP requests and check the servers’ availability.
@@ -14,3 +16,7 @@ Additionally, each server URL is clickable, allowing users to directly visit the
 This combination of real-time monitoring and logging ensures that users have both a live status overview and a historical log of issues.
 
 To start the dashboard, run `perl bin/dashboard daemon` and connect to `http://localhost:3000`.
+
+## Dependencies
+
+`apt install libhtml-treebuilder-xpath-perl libmojolicious-perl`
