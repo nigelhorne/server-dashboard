@@ -302,7 +302,7 @@ __DATA__
       <th data-column="status" draggable="true">Status</th>
       <th data-column="code" draggable="true">HTTP Code</th>
       <th data-column="duration" draggable="true">Response Time</th>
-      <th data-column="chart">Latency Chart</th>
+      <th data-column="chart" draggable="true">Latency Chart</th>
     </tr>
   </thead>
   <tbody>
