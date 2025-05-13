@@ -111,7 +111,7 @@ get '/' => sub {
 	my $ua = LWP::UserAgent->new(timeout => 5);
 	my @servers = load_servers();
 
-	my $pm = Parallel::ForkManager->new(scalar(@servers));	# using the system temp dir $L<File::Temp::tempdir()
+	my $pm = Parallel::ForkManager->new((scalar(@servers) > 5) ? 5 : scalar(@servers));	# using the system temp dir $L<File::Temp::tempdir()
 
 	# data structure retrieval and handling
 	my %responses;  # for collecting responses	
