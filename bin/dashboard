@@ -1,7 +1,8 @@
 #!/usr/bin/env perl
 
 # TODO: Remove the inline icons - I don't like UTF-8 in source code like this
-# The icons should be configurable
+# TODO: The icons should be configurable
+# TODO: Get the servers in parallel
 
 use strict;
 use warnings;
