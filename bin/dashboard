@@ -97,7 +97,7 @@ sub load_servers {
 	if(my $config = Config::Abstraction->new(no_fixate => 1)) {
 		if(my $logger = $config->get('logger') || $config->get('global.logger')) {
 			$log = Log::Abstraction->new($logger);
-			return @{$config->get('servers')};
+			return $config->get('servers');
 		}
 	}
 }
@@ -109,7 +109,7 @@ get '/' => sub {
 	my $group_filter = $c->param('group') || 'all';  # Filter by server group
 
 	my $ua = LWP::UserAgent->new(timeout => 5);
-	my @servers = load_servers();
+	my @servers = @{load_servers()};
 
 	my $pm = Parallel::ForkManager->new((scalar(@servers) > 5) ? 5 : scalar(@servers));	# using the system temp dir $L<File::Temp::tempdir()
 
