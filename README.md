@@ -19,4 +19,4 @@ To start the dashboard, run `perl bin/dashboard daemon` and connect to `http://l
 
 ## Dependencies
 
-`apt install libhtml-treebuilder-xpath-perl libmojolicious-perl`
+`apt install libhtml-treebuilder-xpath-perl libmojolicious-perl libparallel-forkmanager-perl`
