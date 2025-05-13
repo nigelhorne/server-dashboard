@@ -111,12 +111,12 @@ get '/' => sub {
 	my $ua = LWP::UserAgent->new(timeout => 5);
 	my @servers = load_servers();
 
-	my $pm = Parallel::ForkManager->new(20);  # using the system temp dir $L<File::Temp::tempdir()
+	my $pm = Parallel::ForkManager->new(scalar(@servers));	# using the system temp dir $L<File::Temp::tempdir()
 
 	# data structure retrieval and handling
 	my %responses;  # for collecting responses	
 
-	$pm -> run_on_finish (
+	$pm->run_on_finish (
 		sub {
 			my ($pid, $exit_code, $url, $exit_signal, $core_dump, $response) = @_;
 
