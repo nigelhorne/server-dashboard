@@ -2,8 +2,7 @@
 
 # TODO: Remove the inline icons - I don't like UTF-8 in source code like this
 # TODO: The icons should be configurable
-
-# Uses Parallel::ForkManager to send requests in parallel
+# TODO: Get the servers in parallel
 
 use strict;
 use warnings;
@@ -23,7 +22,6 @@ BEGIN {
 		'HTML::TreeBuilder::XPath',
 		'LWP::UserAgent',
 		'Mojolicious::Lite',
-		'Parallel::ForkManager',
 		'URI',
 	);
 	# Attempt to load each module and track missing ones
@@ -111,50 +109,6 @@ get '/' => sub {
 	my $ua = LWP::UserAgent->new(timeout => 5);
 	my @servers = load_servers();
 
-	my $pm = Parallel::ForkManager->new(20);  # using the system temp dir $L<File::Temp::tempdir()
-
-	# data structure retrieval and handling
-	my %responses;  # for collecting responses	
-
-	$pm -> run_on_finish (
-		sub {
-			my ($pid, $exit_code, $url, $exit_signal, $core_dump, $response) = @_;
-
-			# see what the child sent us, if anything
-			if(defined($response)) {  # test rather than assume child sent anything
-				$responses{$response->{'url'}} = $response;
-			} else {
-				# log_error($url, 'Unreachable', $res->status_line());
-			}
-		}
-	);
-
-	foreach my $url (@servers) {
-		$pm->start($url->{'url'}) and next;
-
-		my $response;
-		my $start = time;
-		eval {
-			$response = $ua->get($url->{'url'});
-		};
-		my $duration = int(1000 * (time - $start));	# in ms
-
-		if($response) {
-			$pm->finish(0, {
-				url => $url->{'url'},
-				response => $response,
-				duration => $duration
-			});
-		} else {
-			$pm->finish(1, {
-				url => $url->{'url'},
-				duration => $duration
-			});
-		}
-	}
-
-	$pm->wait_all_children();
-
 	my @statuses;
 	foreach my $url (@servers) {
 	        next if $group_filter ne 'all' && $url->{group} ne $group_filter;
@@ -165,8 +119,10 @@ get '/' => sub {
 		my ($res, $status, $color, $code, $icon, $duration, $tooltip);
 
 		my $start = time;
-		$res = $responses{$url}->{'response'};
-		$duration = $responses{$url}->{'duration'};
+		eval {
+			$res = $ua->get($url);
+		};
+		$duration = int(1000 * (time - $start));	# in ms
 
 		my $favicon_url = '';
 		# Fallback if no icon found
@@ -174,7 +130,7 @@ get '/' => sub {
 			($favicon_url = $url) =~ s{^(https?://[^/]+).*}{$1/favicon.ico};
 		}
 
-		if(($res->code == 500 && $res->decoded_content =~ /Can't connect|Name or service not known|timed out/i)) {
+		if ($@ || !$res || ($res->code == 500 && $res->decoded_content =~ /Can't connect|Name or service not known|timed out/i)) {
 			$status= 'Unreachable';
 			$color = 'red';
 			$icon = decode_entities('&#x1F534;');	# Red blob
