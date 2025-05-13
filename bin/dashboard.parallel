@@ -1,0 +1,541 @@
+#!/usr/bin/env perl
+
+# TODO: Remove the inline icons - I don't like UTF-8 in source code like this
+# TODO: The icons should be configurable
+
+# Uses LWP::Parallel to get the requests in parallel
+# FIXME: The author admits that module is broken with HTTPS, so don't use
+
+use strict;
+use warnings;
+
+use utf8;	# Needed for &ShortUpArrow; and &ShortDownArrow;
+use feature 'state';
+
+my @needfull;	# Tracks required modules to be installed
+
+# Install Pre-requisites
+BEGIN {
+	my @modules = (
+		'Config::Abstraction',
+		'Log::Abstraction',
+		'File::Basename',
+		'HTML::Entities',
+		'HTML::TreeBuilder::XPath',
+		'HTTP::Request',
+		'LWP::ConnCache',
+		'LWP::Parallel::UserAgent',
+		'Mojolicious::Lite',
+		'URI',
+	);
+	# Attempt to load each module and track missing ones
+	foreach my $module(@modules) {
+		eval "use $module";
+		if($@) {
+			# Install module dependencies
+			if($module =~ /(.+)\s/) {
+				# Specific version not satisfied
+				push @needfull, $1;
+			} else {
+				push @needfull, $module;
+			}
+		}
+	}
+	# Attempt to load each module and track missing ones
+	if(scalar(@needfull)) {
+		my $list = join(' ', @needfull);
+		print "Installing $list\n";
+		$ENV{'PERL_MM_USE_DEFAULT'} = 1;
+		# system("cpan -i $list");
+		system('perl -MCPAN -e \'CPAN::Shell->install("' . join('", "', @needfull) . '")\'');
+	}
+}
+
+# Retry loading missing modules after installation
+foreach my $module (@needfull) {
+	my ($name, $version) = $module =~ /(.+?)\s(.+)?$/;
+	$name ||= $module;
+
+	# Extract module name, replacing hyphens with `::` and removing extensions
+	$name =~ s{.+/}{};	# Remove path if present
+	$name =~ s{-}{::}g;	# Convert hyphens to `::`
+	$name =~ s{\.tar\.gz$}{}; # Remove file extension
+	$name =~ s{::(\d+)$}{ $1}; # Adjust version formatting if embedded in module name
+
+	if($version) {
+		eval "require $name $version" or die $@;
+	} else {
+		eval "require $name" or die $@;
+	}
+	$name->import();
+
+	# Uncomment to check version if needed
+	die "$name: need $version, got ", $name->VERSION if $version && $name->VERSION < $version;
+}
+
+use Mojo::JSON qw(encode_json);
+use Time::HiRes qw(time);
+use autodie qw(:all);
+
+my $conn_cache = LWP::ConnCache->new();
+my $log;
+
+# Log to a file for errors
+sub log_error {
+	my ($url, $status, $message) = @_;
+
+	if($log) {
+		$log->warn("$url - $status - $message");
+	} else {
+		my $log_file = 'server_status.log';
+		my $timestamp = localtime();
+		open my $log_fh, '>>', $log_file or die "Cannot open log file: $!";
+		print $log_fh "$timestamp - $status - $url - $message\n";
+		close $log_fh;
+	}
+}
+
+# Read server list from config file
+sub load_servers {
+	if(my $config = Config::Abstraction->new(no_fixate => 1)) {
+		if(my $logger = $config->get('logger') || $config->get('global.logger')) {
+			$log = Log::Abstraction->new($logger);
+			return @{$config->get('servers')};
+		}
+	}
+}
+
+# Route: dashboard with optional filter
+get '/' => sub {
+	my $c = shift;
+	my $filter = $c->param('filter') || 'all';	# all, ok, error
+	my $group_filter = $c->param('group') || 'all';  # Filter by server group
+
+	my @servers = load_servers();
+
+	# my $ua = LWP::UserAgent->new();
+	my $ua = LWP::Parallel::UserAgent->new();
+	$ua->duplicates(1);
+	$ua->timeout(5);
+	$ua->redirect(1);
+	$ua->remember_failures(1);
+	$ua->nonblock(1);
+	# $ua->agent($useragentname);
+	# $ua->from($me);
+	$ua->env_proxy(1);
+	$ua->max_hosts(scalar(@servers));
+	$ua->conn_cache($conn_cache);
+	$ua->ssl_opts(verify_hostname => 0);	# FIXME
+
+	my @requests;
+
+	foreach my $url (@servers) {
+		my $request = HTTP::Request->new('GET', $url->{'url'});
+		if(my $res = $ua->register($request)) {
+			print $res->error_as_HTML();
+			log_error($url, 'Unreachable', $res->status_line());
+		} else {
+			push @requests, $request;
+		}
+	}
+
+	my %responses;
+	eval {
+		my $entries = $ua->wait();
+		foreach (keys %$entries) {
+			my $response = $entries->{$_}->response();
+			$responses{$response->request()->url()} = $response;
+		}
+	};
+	my @statuses;
+	foreach my $url (@servers) {
+	        next if $group_filter ne 'all' && $url->{group} ne $group_filter;
+
+		my $group = $url->{'group'};
+		$url = $url->{'url'};
+
+		my ($res, $status, $color, $code, $icon, $duration, $tooltip);
+
+		my $start = time;
+		# eval {
+			# $res = $ua->get($url);
+		# };
+		$res = $responses{$url};
+		$duration = int(1000 * (time - $start));	# in ms
+
+		my $favicon_url = '';
+		# Fallback if no icon found
+		if (!$favicon_url) {
+			($favicon_url = $url) =~ s{^(https?://[^/]+).*}{$1/favicon.ico};
+		}
+
+		if ($@ || !$res || ($res->code == 500 && $res->decoded_content =~ /Can't connect|Name or service not known|timed out/i)) {
+			$status= 'Unreachable';
+			$color = 'red';
+			$icon = decode_entities('&#x1F534;');	# Red blob
+			$code = '';
+			$tooltip = $@ || ($res ? $res->status_line : 'No response');
+			log_error($url, 'Unreachable', $tooltip);
+		} elsif ($res->is_success) {
+			$status= 'OK';
+			$color = 'green';
+			$icon = decode_entities('&#x1F7E2;');	# Green blob
+			$code = $res->code();
+			$tooltip = $res->status_line();
+
+			if($res && $res->is_success) {
+				my $tree = HTML::TreeBuilder::XPath->new;
+				$tree->parse($res->decoded_content);
+				my ($icon_node) = $tree->findnodes('//link[contains(translate(@rel, "ICON", "icon"), "icon")][@href]');
+				if ($icon_node) {
+					my $href = $icon_node->attr('href');
+					my $base = URI->new($url);
+					$favicon_url = URI->new_abs($href, $base)->as_string();
+				}
+				$tree->delete();
+			}
+
+		} else {
+			$status= 'HTTP Error';
+			$color = 'orange';
+			$icon = decode_entities('&#x1F7E1;');	# Yellow blob
+			$code = $res->code;
+			$tooltip = $res->status_line;
+			log_error($url, 'HTTP Error', $tooltip);
+		}
+
+		my $time_color = $duration < 500 ? 'green'
+						: $duration < 1000 ? 'orange'
+						: 'red';
+
+		state %history;
+
+		push @{$history{$url}}, $duration;
+		splice @{$history{$url}}, 0, -20 if @{$history{$url}} > 20;
+		# $history = [ @$history[-20..-1] ] if @$history > 20;
+
+		push @statuses, {
+			url => $url,
+			group => $group,
+			status => $status,
+			color => $color,
+			code => $code,
+			icon => $icon,
+			duration => $duration,
+			time_color => $time_color,
+			tooltip => $tooltip,
+			favicon => $favicon_url,
+			history => $history{$url},
+		};
+	}
+
+	# Apply filter
+	if ($filter eq 'ok') {
+		@statuses = grep { $_->{color} eq 'green' } @statuses;
+	} elsif ($filter eq 'error') {
+		@statuses = grep { $_->{color} ne 'green' } @statuses;
+	}
+
+	$c->stash(
+	    statuses     => \@statuses,
+	    filter       => $filter,
+	    encode_json  => \&encode_json,
+	    group_filter => $group_filter
+	);
+
+	$c->render(template => 'dashboard');
+};
+
+app->start();
+
+__DATA__
+
+@@ dashboard.html.ep
+% layout 'default';
+% title 'Web Server Dashboard';
+<h1>Web Server Status</h1>
+<p><em>Auto-refreshes every 60 seconds</em></p>
+
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1em;">
+  <div>
+    <label for="filter">Filter:</label>
+    <select id="filter" onchange="applyFilter()">
+      <option value="all">All</option>
+      <option value="green">Healthy</option>
+      <option value="yellow">Warning</option>
+      <option value="red">Error</option>
+    </select>
+    <label for="group-filter">Group:</label>
+    <select id="group-filter" onchange="applyGroupFilter()">
+        <option value="all" <%= 'selected' if $group_filter eq 'all' %>>All</option>
+        <option value="Production" <%= 'selected' if $group_filter eq 'Production' %>>Production</option>
+        <option value="Development" <%= 'selected' if $group_filter eq 'Development' %>>Development</option>
+    </select>
+  <div>
+</div>
+
+  </div>
+  <div style="display: flex; gap: 0.5em;">
+    <button onclick="refreshPage()">Refresh</button>
+    <button onclick="exportTable()">Export</button>
+    <button onclick="resetOrder()">Reset Column Order</button>
+  </div>
+</div>
+
+<table id="dashboard-table" border="1" cellpadding="6" cellspacing="0">
+  <thead>
+    <tr id="columns-row">
+      <th data-column="url" draggable="true">Server</th>
+      <th data-column="group" draggable="true">Group</th>
+      <th data-column="status" draggable="true">Status</th>
+      <th data-column="code" draggable="true">HTTP Code</th>
+      <th data-column="duration" draggable="true">Response Time</th>
+      <th data-column="chart">Latency Chart</th>
+    </tr>
+  </thead>
+  <tbody>
+    % my $i = 0;
+    % for my $s (@$statuses) {
+      <tr>
+        <td>
+		<a href="<%= $s->{url} %>" target="_blank"><img src="<%= $s->{favicon} %>" height="16" width="16"></a>
+		<a href="<%= $s->{url} %>" target="_blank"><%= $s->{url} %></a>
+	</td>
+	<td><%= $s->{group} %></td>
+<td style="color:<%= $s->{color} %>;" class="compact-latency" title="<%= $s->{tooltip} // '' %>">
+  <b><%= $s->{icon} %> <%= $s->{status} %></b>
+</td>
+
+        <td><%= $s->{code} || '-' %></td>
+	<td style="color:<%= $s->{time_color} %>;" class="compact-latency"><%= $s->{duration} %> ms</td>
+        <td>
+          <canvas class="latency-chart" id="chart-<%= $i %>" width="100" height="30"></canvas>
+<script>
+  const ctx<%= $i %> = document.getElementById('chart-<%= $i %>').getContext('2d');
+  new Chart(ctx<%= $i %>, {
+    type: 'line',
+    data: {
+      labels: [...Array(<%= scalar(@{$s->{history} // []}) %>).keys()],
+      datasets: [{
+	data: <%= $encode_json->($s->{history} || []) %>,
+        borderColor: 'blue',
+        backgroundColor: 'rgba(0,0,255,0.1)',
+        fill: true,
+        tension: 0.3,
+      }]
+    },
+    options: {
+      scales: { x: { display: false }, y: { display: false } },
+      plugins: { legend: { display: false } }
+    }
+  });
+function applyGroupFilter() {
+    const filter = document.getElementById('group-filter').value;
+    window.location.href = `/?group=${filter}`;
+}
+
+</script>
+
+        </td>
+      </tr>
+    % $i++;
+    % }
+  </tbody>
+</table>
+
+@@ layouts/default.html.ep
+<!DOCTYPE html>
+<html>
+  <head>
+	<title><%= title %></title>
+	<meta http-equiv="refresh" content="60">
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 6px 12px; text-align: left; }
+  th { background: #f0f0f0; }
+  a { text-decoration: none; color: blue; }
+  select { margin: 8px; padding: 4px; }
+
+  .compact-latency {
+    max-height: 2.4em; /* roughly 2 lines */
+    overflow: hidden;
+    line-height: 1.2em;
+    white-space: normal;
+  }
+.latency-chart {
+  height: 30px;
+  max-height: 3.6em;
+}
+	</style>
+	<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+  <%= content %>
+<script>
+function resetOrder() {
+  localStorage.removeItem('columnOrder');
+  location.reload();
+}
+
+function refreshPage() {
+  location.reload();
+}
+
+function exportTable() {
+  const rows = document.querySelectorAll("#dashboard-table tr");
+  let csv = "";
+  rows.forEach(row => {
+    let cols = [...row.children].map(td => "${td.textContent.trim()}");
+    csv += cols.join(",") + "\n";
+  });
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "server_status_export.csv";
+  link.click();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const table = document.getElementById('dashboard-table');
+  const headerRow = table.querySelector('thead tr');
+  const bodyRows = [...table.querySelectorAll('tbody tr')];
+  const storageKey = 'columnOrder';
+  const sortKey = 'columnSort';
+
+  // Save current column order to localStorage
+  function saveOrder() {
+    const order = [...headerRow.children].map(th => th.textContent.trim());
+    localStorage.setItem(storageKey, JSON.stringify(order));
+  }
+
+  // Restore column order from localStorage
+  function restoreOrder() {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+    if (!saved.length) return;
+
+    const currentHeaders = [...headerRow.children];
+    const newOrder = [];
+
+    saved.forEach(name => {
+      const match = currentHeaders.find(th => th.textContent.trim() === name);
+      if (match) newOrder.push(match);
+    });
+
+    newOrder.forEach(th => headerRow.appendChild(th));
+
+    bodyRows.forEach(row => {
+      const cells = [...row.children];
+      const newCells = [];
+
+      saved.forEach((name, i) => {
+        const idx = currentHeaders.findIndex(th => th.textContent.trim() === name);
+        if (idx > -1) newCells.push(cells[idx]);
+      });
+
+      newCells.forEach(cell => row.appendChild(cell));
+    });
+  }
+
+  // Drag and drop behavior
+  let draggedIndex;
+
+  headerRow.addEventListener('dragstart', (e) => {
+    draggedIndex = [...headerRow.children].indexOf(e.target);
+  });
+
+  headerRow.addEventListener('dragover', (e) => {
+    e.preventDefault();
+  });
+
+  headerRow.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const targetIndex = [...headerRow.children].indexOf(e.target);
+    if (draggedIndex === targetIndex) return;
+
+    // Move header
+    headerRow.insertBefore(
+      headerRow.children[draggedIndex],
+      headerRow.children[targetIndex + (draggedIndex < targetIndex ? 1 : 0)]
+    );
+
+    // Move each row's cells
+    bodyRows.forEach(row => {
+      const cells = row.children;
+      row.insertBefore(
+        cells[draggedIndex],
+        cells[targetIndex + (draggedIndex < targetIndex ? 1 : 0)]
+      );
+    });
+
+    saveOrder(); // Save new order
+  });
+
+  restoreOrder(); // Apply saved order on load
+
+  // Save sort settings
+  function saveSort(column, direction) {
+    localStorage.setItem(sortKey, JSON.stringify({ column, direction }));
+  }
+
+  // Restore sort settings
+  function restoreSort() {
+    const saved = JSON.parse(localStorage.getItem(sortKey) || '{}');
+    if (saved.column) {
+      applySort(saved.column, saved.direction, false);
+    }
+  }
+
+function applySort(column, direction = 'asc', save = true) {
+  const colIndex = [...headerRow.children].findIndex(th => th.dataset.column === column);
+  if (colIndex === -1) return;
+
+  // Reset all sort indicators
+  headerRow.querySelectorAll('th').forEach(th => {
+    const base = th.dataset.label || th.textContent.replace(/ ↑| ↓/, '').trim();
+    th.textContent = base;
+    th.dataset.label = base;
+  });
+
+  // Add arrow to sorted column
+  const sortedTh = headerRow.children[colIndex];
+  // &ShortUpArrow; &ShortDownArrow;
+  sortedTh.textContent = (sortedTh.dataset.label || sortedTh.textContent.trim()) + (direction === 'asc' ? ' ↑' : ' ↓');
+
+  // Sort rows
+  const rows = [...table.querySelectorAll('tbody tr')];
+  rows.sort((a, b) => {
+    const aText = a.children[colIndex].textContent.trim();
+    const bText = b.children[colIndex].textContent.trim();
+    const aVal = isNaN(aText) ? aText.toLowerCase() : parseFloat(aText);
+    const bVal = isNaN(bText) ? bText.toLowerCase() : parseFloat(bText);
+    return direction === 'asc' ? (aVal > bVal ? 1 : -1) : (aVal < bVal ? 1 : -1);
+  });
+
+  const tbody = table.querySelector('tbody');
+  rows.forEach(row => tbody.appendChild(row));
+
+  if (save) saveSort(column, direction);
+}
+
+  // Sort toggle click handler
+  headerRow.querySelectorAll('th').forEach(th => {
+    th.addEventListener('click', (e) => {
+      // if (e.target.draggable) return; // Skip drag
+
+      const column = th.dataset.column;
+      const current = JSON.parse(localStorage.getItem(sortKey) || '{}');
+      const newDirection = (current.column === column && current.direction === 'asc') ? 'desc' : 'asc';
+      applySort(column, newDirection);
+    });
+  });
+
+  restoreOrder(); // existing
+  restoreSort();  // new
+});
+
+</script>
+  </body>
+</html>
