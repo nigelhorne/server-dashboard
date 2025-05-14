@@ -113,6 +113,7 @@ sub load_config
 			unreachable => decode_entities('&#x1F534;')	# Red blob
 		};
 		$rc->{max_processes} = $config->get('maxprocesses') || 5;
+		$rc->{'config'} = $config;
 		if(my $logger = $config->get('logger') || $config->get('global.logger')) {
 			$log = Log::Abstraction->new($logger);
 			$rc->{'servers'} = $config->get('servers');
@@ -345,7 +346,7 @@ get '/' => sub {
 	$c->render(template => 'dashboard');
 
 	if(scalar(@alerts)) {
-		send_email_alert($config, 'Site Alert: ' . scalar(@alerts) . ' issues', join("\n", @alerts));
+		send_email_alert($config->{'config'}, 'Site Alert: ' . scalar(@alerts) . ' issues', join("\n", @alerts));
 	}
 };
 
