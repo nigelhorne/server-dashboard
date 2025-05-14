@@ -140,6 +140,7 @@ sub send_email_alert
 	my($config, $subject, $body) = @_;
 
 	if(open(my $pout, '|-', '/usr/sbin/sendmail -t')) {
+		binmode($pout, ':utf8');
 		my $from = ($config && $config->get('alert.from')) || 'monitor@nigelhorne.com';
 		my $to = ($config && $config->get('alert.to')) || 'alerts@nigelhorne.com';
 
