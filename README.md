@@ -17,6 +17,27 @@ This combination of real-time monitoring and logging ensures that users have bot
 
 To start the dashboard, run `perl bin/dashboard daemon` and connect to `http://localhost:3000`.
 
-## Dependencies
+## Pre-Requisites
 
 `apt install libhtml-treebuilder-xpath-perl libmojolicious-perl libparallel-forkmanager-perl`
+
+The dashboard uses many CPAN modules which it will try to install if they are not
+on your system.
+If it doesn't have the necessary privilege to install the modules it will
+fail on starting up with "permission denied" errors.
+This is most likely because you're not running as root
+(which is of course how it should be)
+and you're not using [local::lib](https://metacpan.org/pod/local::lib),
+or [Perlbrew](https://perlbrew.pl/).
+
+Running the program for the first time with no
+arguments should install them,
+of course that will fail if you don't have the privilege,
+in which case you'll need to add them by hand.
+To install by hand you'll either have to use local::lib or perlbrew.
+Of course you could also run gedcom as root,
+but I strongly advise you don't do that.
+
+You can also try
+```cpan -i lazy && perl -Mlazy gedcom```
+though I've not tested that.
