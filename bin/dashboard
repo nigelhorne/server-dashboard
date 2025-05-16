@@ -720,18 +720,18 @@ function notifyStatusRed(url) {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-	if (Notification && Notification.permission !== "granted") {
-		Notification.requestPermission();
-	}
-	checkForStatusChanges();
-});
+			document.addEventListener("DOMContentLoaded", () => {
+				if (Notification && Notification.permission !== "granted") {
+					Notification.requestPermission();
+				}
+				checkForStatusChanges();
+			});
 
-function showNotification(message) {
-  if (Notification.permission === "granted") {
-    new Notification(message);
-  }
-}
+			function showNotification(message) {
+				if (Notification.permission === "granted") {
+					new Notification(message);
+				}
+			}
 
 		</script>
 	</body>
