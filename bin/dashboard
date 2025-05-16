@@ -43,10 +43,14 @@ BEGIN {
 	# Attempt to load each module and track missing ones
 	if(scalar(@needfull)) {
 		my $list = join(' ', @needfull);
-		print "Installing $list\n";
-		$ENV{'PERL_MM_USE_DEFAULT'} = 1;
-		# system("cpan -i $list");
-		system('perl -MCPAN -e \'CPAN::Shell->install("' . join('", "', @needfull) . '")\'');
+		if($ENV{'BOOTSTRAP'}) {
+			print "Installing $list\n";
+			$ENV{'PERL_MM_USE_DEFAULT'} = 1;
+			# system("cpan -i $list");
+			system('perl -MCPAN -e \'CPAN::Shell->install("' . join('", "', @needfull) . '")\'');
+		} else {
+			die "You need the following modules: $list";
+		}
 	}
 }
 
