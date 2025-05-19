@@ -499,6 +499,25 @@ fetchAndDraw();
 </script>
 -->
 
+<script>
+	// Make sure that the server column is wide enough
+	window.addEventListener('DOMContentLoaded', () => {
+		const table = document.getElementById('dashboard-table');
+		const colIndex = Array.from(table.rows[0].cells).findIndex(cell => cell.dataset.column === 'url');
+		let maxLength = 0;
+
+		for (let row of table.tBodies[0].rows) {
+			const cellText = row.cells[colIndex].innerText;
+			if (cellText.length > maxLength) maxLength = cellText.length;
+		}
+
+		const pxPerChar = 8; // average character width
+		const padding = 20;  // extra room for padding
+		const minWidth = Math.max(150, (maxLength * pxPerChar) + padding);
+
+		table.rows[0].cells[colIndex].style.minWidth = `${minWidth}px`;
+	});
+</script>
 
 @@ layouts/default.html.ep
 <!DOCTYPE html>
