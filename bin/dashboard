@@ -150,6 +150,7 @@ sub send_email_alert
 
 		print $pout "To: $to\nFrom: $from\n",
 			"Subject: $subject\n\n$body\n";
+		close $pout;
 	}
 }
 
@@ -260,7 +261,7 @@ get '/' => sub {
 				my $key = "DOWN:$url";
 
 				if (should_alert($key, $start)) {
-					push @alerts, "❌ $url is DOWN";
+					push @alerts, "$url is DOWN";
 					$last_alerts{$key} = $start;
 				}
 			}
@@ -284,7 +285,7 @@ get '/' => sub {
 				my $key = "SLOW:$url";
 
 				if (should_alert($key, $start)) {
-					push @alerts, "⚠️ $url is slow: ${latency}ms";
+					push @alerts, "$url is slow: ${latency}ms";
 					$last_alerts{$key} = $start;
 				}
 			}
@@ -298,7 +299,7 @@ get '/' => sub {
 				my $key = "SLOW:$url";
 
 				if (should_alert($key, $start)) {
-					push @alerts, "⚠️ $url is slow: ${latency}ms";
+					push @alerts, "$url is slow: ${latency}ms";
 					$last_alerts{$key} = $start;
 				}
 			}
