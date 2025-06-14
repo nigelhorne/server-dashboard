@@ -1,4 +1,4 @@
-#!/usr/bin/env perl
+#!/usr/bin/env morbo
 
 # TODO: Remove the inline icons - I don't like UTF-8 in source code like this
 # TODO: The icons should be configurable
