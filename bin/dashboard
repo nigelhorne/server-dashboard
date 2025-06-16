@@ -182,6 +182,9 @@ get '/' => sub {
 	# $ua->agent($useragentname);
 	# $ua->from($me);
 	my $config = load_config();
+	if(!defined($config->{'servers'})) {
+		die 'No servers defined';
+	}
 	my @servers = @{$config->{'servers'}};
 	my $max_processes = $config->{'max_processes'};
 
