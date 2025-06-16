@@ -674,7 +674,7 @@ function applySort(column, direction = 'asc', save = true) {
 
   // Reset all sort indicators
   headerRow.querySelectorAll('th').forEach(th => {
-    const base = th.dataset.label || th.textContent.replace(/ ↑| ↓/, '').trim();
+    const base = th.dataset.label || th.textContent.replace(/ ▲|  ▼/, '').trim();
     th.textContent = base;
     th.dataset.label = base;
   });
@@ -682,7 +682,7 @@ function applySort(column, direction = 'asc', save = true) {
   // Add arrow to sorted column
   const sortedTh = headerRow.children[colIndex];
   // &ShortUpArrow; &ShortDownArrow;
-  sortedTh.textContent = (sortedTh.dataset.label || sortedTh.textContent.trim()) + (direction === 'asc' ? ' ↑' : ' ↓');
+  sortedTh.textContent = (sortedTh.dataset.label || sortedTh.textContent.trim()) + (direction === 'asc' ? ' ▲' : ' ▼');
 
   // Sort rows
   const rows = [...table.querySelectorAll('tbody tr')];
@@ -734,14 +734,14 @@ function checkForStatusChanges() {
   });
 }
 
-function notifyStatusRed(url) {
-  if (Notification.permission === "granted") {
-    new Notification("⚠ Server Alert", {
-      body: `Status changed to RED for: ${url}`,
-      icon: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/45/Warning_icon.svg/1024px-Warning_icon.svg.png"
-    });
-  }
-}
+			function notifyStatusRed(url) {
+				if (Notification.permission === "granted") {
+					new Notification("⚠ Server Alert", {
+						body: `Status changed to RED for: ${url}`,
+						icon: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/45/Warning_icon.svg/1024px-Warning_icon.svg.png"
+					});
+				}
+			}
 
 			document.addEventListener("DOMContentLoaded", () => {
 				if (Notification && Notification.permission !== "granted") {
